@@ -2,85 +2,112 @@ import json
 import os
 from tqdm import tqdm
 
+import os
+
+###### NOME CARTELLA
+main_folder = 'SODA'  # Percorso cartella principale (es. 'SODA')
+
+
+
+
+def decrement_yolo_class_ids(folder_path):
+    for filename in os.listdir(folder_path):
+        if filename.endswith(".txt"):
+            file_path = os.path.join(folder_path, filename)
+            updated_lines = []
+
+            with open(file_path, 'r') as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if not parts:
+                        continue
+                    try:
+                        class_id = int(parts[0]) - 1  # decrementa di 1
+                        if class_id < 0:
+                            raise ValueError(f"class_id negativo in {filename}")
+                        updated_line = ' '.join([str(class_id)] + parts[1:])
+                        updated_lines.append(updated_line)
+                    except ValueError:
+                        print(f"⚠️  Ignorata riga non valida in {filename}: {line.strip()}")
+
+            with open(file_path, 'w') as f:
+                for line in updated_lines:
+                    f.write(line + '\n')
+
+    print(f"✅ Class_id decrementati in tutti i file .txt in {folder_path}")
+
+
 # Funzione per convertire le annotazioni COCO in formato YOLO
-def convert_coco_to_yolo(coco_json_file, images_dir, output_dir, class_names):
-    # Carica il file JSON delle annotazioni COCO
+def convert_coco_to_yolo(coco_json_file, images_dir, output_dir, category_id_to_yolo_id):
     with open(coco_json_file, 'r') as f:
         coco_data = json.load(f)
 
-    # Crea la cartella di output se non esiste
     os.makedirs(output_dir, exist_ok=True)
 
-    # Crea un dizionario per mappare gli ID delle categorie ai loro nomi
-    category_id_map = {category['id']: category['name'] for category in coco_data['categories']}
+    images = {img['id']: img['file_name'] for img in coco_data['images']}
+    image_sizes = {img['id']: (img['width'], img['height']) for img in coco_data['images']}
 
-    # Crea una mappa per la categoria in formato YOLO (starta da 0)
-    class_id_map = {name: idx for idx, name in enumerate(class_names)}
-
-    # Crea un dizionario che tiene traccia delle immagini
-    images = {image['id']: image['file_name'] for image in coco_data['images']}
-
-    # Itera su ogni annotazione e crea i file YOLO
-    #for ann in coco_data['annotations']:
-    for ann in tqdm(coco_data['annotations'], desc="Converting annotations", unit="annotation"):
-        # Ottieni l'immagine
+    for ann in tqdm(coco_data['annotations'], desc="Converting annotations", unit=" annotation"):
         img_id = ann['image_id']
         image_name = images[img_id]
+        img_width, img_height = image_sizes[img_id]
 
-        # Ottieni le dimensioni dell'immagine
-        img_info = next(img for img in coco_data['images'] if img['id'] == img_id)
-        img_width = img_info['width']
-        img_height = img_info['height']
-
-        # Estrai le informazioni del bounding box
         x, y, w, h = ann['bbox']
-
-        # Normalizza le coordinate del bounding box
         x_center = (x + w / 2) / img_width
         y_center = (y + h / 2) / img_height
         width = w / img_width
         height = h / img_height
 
-        # Ottieni il class ID (e.g. "vehicle" -> 0, "person" -> 1)
-        class_name = category_id_map[ann['category_id']]
-        class_id = class_id_map[class_name]
+        # Finalmente corretto
+        class_id = category_id_to_yolo_id[ann['category_id']]
 
-        # Crea il nome del file YOLO per l'immagine
-        yolo_annotation_file = os.path.join(output_dir, f"{os.path.splitext(image_name)[0]}.txt")
-
-        # Scrivi l'annotazione nel file YOLO (se il file esiste già, lo aggiorniamo)
-        with open(yolo_annotation_file, 'a') as file:
-            file.write(f"{class_id} {x_center} {y_center} {width} {height}\n")
+        yolo_file = os.path.join(output_dir, f"{os.path.splitext(image_name)[0]}.txt")
+        with open(yolo_file, 'a') as f:
+            f.write(f"{class_id} {x_center} {y_center} {width} {height}\n")
 
     print(f"Conversione completata. Le annotazioni YOLO sono state salvate in: {output_dir}")
+
+
+
+
+
 
 # Funzione principale che converte tutte le cartelle train, valid, test
 def convert_all_folders_to_yolo(main_folder):
     for split in ['train', 'valid', 'test']:
         print(f"Converting {split} dataset...")
         coco_json_file = os.path.join(main_folder, split, '_annotations.coco.json')
-        class_names = extract_class_names(coco_json_file)  # Estrai automaticamente le categorie
-        images_dir = os.path.join(main_folder, split)  # Le immagini sono direttamente in 'train', 'valid' e 'test'
-        output_dir = images_dir  # Le annotazioni vanno direttamente nella cartella delle immagini
 
-        # Converte il file COCO in YOLO per ciascuna delle cartelle
-        convert_coco_to_yolo(coco_json_file, images_dir, output_dir, class_names)
+        # Estrai le categorie con id e nome
+        categories = extract_class_names(coco_json_file)
+        class_names = [cat['name'] for cat in categories]
+        category_id_to_yolo_id = {cat['id']: idx for idx, cat in enumerate(categories)}
+        print(category_id_to_yolo_id)
+
+        images_dir = os.path.join(main_folder, split)
+        output_dir = images_dir
+
+        convert_coco_to_yolo(coco_json_file, images_dir, output_dir, category_id_to_yolo_id)
+
+        decrement_yolo_class_ids(main_folder + "/" + split)
+
 
 # Funzione per estrarre le categorie dal file COCO
 def extract_class_names(coco_json_file):
     with open(coco_json_file, 'r') as f:
         coco_data = json.load(f)
-    class_names = [category['name'] for category in coco_data['categories']]
-    return class_names
+    categories_sorted = sorted(coco_data['categories'], key=lambda x: x['id'])
+    return categories_sorted  # ← Ritorna oggetti completi, non solo nomi
+
 
 # Funzione per creare il file YAML per YOLO
 def create_yaml(dataset_dir, class_names):
     yaml_file = os.path.join(dataset_dir, 'dataset.yaml')
 
     # Creazione dei percorsi per le immagini
-    train_dir = os.path.join(dataset_dir, 'train')
-    val_dir = os.path.join(dataset_dir, 'valid')
-    test_dir = os.path.join(dataset_dir, 'test')
+    train_dir = os.path.join("", 'train')
+    val_dir = os.path.join("", 'valid')
+    test_dir = os.path.join("", 'test')
 
     # Costruisci il contenuto del file YAML
     yaml_content = f"""
@@ -97,12 +124,32 @@ def create_yaml(dataset_dir, class_names):
         f.write(yaml_content)
     print(f"File YAML creato: {yaml_file}")
 
-# Percorso della cartella principale
-main_folder = 'C:/Users/conca/Documents/progetti/vehicle_detection/EAGLE'  # Sostituisci con il percorso della tua cartella principale (es. 'SODA')
-class_names = ['vehicle', 'object']  # Sostituisci con il nome delle categorie del tuo dataset
+
+class_names = ['vehicles-Z6jE-iVPc', 'class_2', 'class_3']  # Nome delle categorie del dataset
 
 # Esegui la conversione per tutte le cartelle
 convert_all_folders_to_yolo(main_folder)
 
 # Creazione del file YAML per YOLO
 create_yaml(main_folder, class_names)
+
+import os
+import shutil
+
+def fix_yolo_structure(base_dir):
+    for split in ['train', 'valid', 'test']:
+        img_dir = os.path.join(base_dir, split, 'images')
+        lbl_dir = os.path.join(base_dir, split, 'labels')
+        os.makedirs(img_dir, exist_ok=True)
+        os.makedirs(lbl_dir, exist_ok=True)
+
+        for f in os.listdir(os.path.join(base_dir, split)):
+            full_path = os.path.join(base_dir, split, f)
+            if f.endswith(('.jpg', '.png')):
+                shutil.move(full_path, os.path.join(img_dir, f))
+            elif f.endswith('.txt'):
+                shutil.move(full_path, os.path.join(lbl_dir, f))
+
+# Esempio d’uso
+fix_yolo_structure(main_folder)
+
